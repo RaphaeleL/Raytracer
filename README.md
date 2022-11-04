@@ -15,4 +15,14 @@ gcov raytracer.cc
 gprof > tayler.gprof
 ```
 
-now you can open the Generated Profiling Files in an Editor of your Choice
+now you can open the Generated Profiling Files in an Editor of your Choice. The get the Generated Teapot use: 
+
+```bash 
+./a.out --no_ppm
+```
+
+## Output
+
+<center>
+  <img src="src/examples/output.png"/>
+</center>
