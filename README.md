@@ -1,3 +1,5 @@
+<img height="150" src="src/examples/output.png" align="right" alt="teapot">
+
 # Raytracer
 
 ## Run
@@ -20,9 +22,3 @@ now you can open the Generated Profiling Files in an Editor of your Choice. The 
 ```bash
 ./a.out --no_ppm
 ```
-
-## Output
-
-<center>
-  <img src="src/examples/output.png"/>
-</center>
