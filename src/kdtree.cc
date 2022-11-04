@@ -6,8 +6,6 @@ BoundingBox::BoundingBox(Vector<FLOAT, 3> min, Vector<FLOAT, 3> max)
     : min(min), max(max) {}
 
 void BoundingBox::split(BoundingBox &left, BoundingBox &right) {
-  // from here
-  // TODO: your code
   FLOAT firstEdge = max[0] - min[0];  // Calc len of frist Edge
   FLOAT secondEdge = max[1] - min[1]; // Calc len of second Edge
   FLOAT thirdEdge = max[2] - min[2];  // Calc len of third Edge
@@ -28,13 +26,9 @@ void BoundingBox::split(BoundingBox &left, BoundingBox &right) {
     left = {{min[0], min[1], min[2]}, {max[0], max[1], center2}};
     right = {{min[0], min[1], center2}, {max[0], max[1], max[2]}};
   }
-  // to here
 }
 
 bool BoundingBox::contains(Vector<FLOAT, 3> v) {
-  // from here
-  // TODO: your code
-  // check if the first is inside
   if (v[0] < min[0] && v[0] > max[0]) {
     return false;
   } else if (v[1] < min[1] && v[1] > max[1]) {
@@ -43,16 +37,11 @@ bool BoundingBox::contains(Vector<FLOAT, 3> v) {
     return false;
   }
   return true;
-  // to here
 }
 
 bool BoundingBox::contains(Triangle<FLOAT> *triangle) {
-  // from here
-  // TODO: your code
-  // check the complete data
   return (contains(triangle->p1) | contains(triangle->p2) |
           contains(triangle->p3));
-  // to here
 }
 
 bool BoundingBox::intersects(Vector<FLOAT, 3> eye, Vector<FLOAT, 3> direction) {
@@ -80,8 +69,6 @@ KDTree::~KDTree() {
 
 KDTree *KDTree::buildTree(KDTree *tree,
                           std::vector<Triangle<FLOAT> *> &triangles) {
-  // from here
-  // TODO: your code
   tree->left = new KDTree();                            // create a left tree
   tree->right = new KDTree();                           // create a right tree
   tree->box.split(tree->left->box, tree->right->box);   // split them
@@ -100,14 +87,11 @@ KDTree *KDTree::buildTree(KDTree *tree,
   }
   tree->left->buildTree(tree->left, leftTriangles);    // build the left tree
   tree->right->buildTree(tree->right, rightTriangles); // build the right one
-  // to here
   return tree;
 }
 
 KDTree *KDTree::buildTree(std::vector<Triangle<FLOAT> *> &triangles) {
   KDTree *root = new KDTree();
-  // from here
-  // TODO: your code
   Vector<FLOAT, 3> s = {INFINITY, INFINITY, INFINITY};    // define a min vec
   Vector<FLOAT, 3> b = {-INFINITY, -INFINITY, -INFINITY}; // define a max vec
   for (Triangle<FLOAT> *triangle : triangles) {        // iterate the triangles
@@ -122,7 +106,6 @@ KDTree *KDTree::buildTree(std::vector<Triangle<FLOAT> *> &triangles) {
   }
   root->box = {s, b};               // create box
   root->buildTree(root, triangles); // build the tree
-  // to here
   return root;
 }
 
@@ -130,8 +113,6 @@ bool KDTree::hasNearestTriangle(Vector<FLOAT, 3> eye,
                                 Vector<FLOAT, 3> direction,
                                 Triangle<FLOAT> *&nearest_triangle, FLOAT &t,
                                 FLOAT &u, FLOAT &v, FLOAT minimum_t) {
-  // from here
-  // TODO: your code
   FLOAT minimum_u = 0.0;
   FLOAT minimum_v = 0.0;
   // KDTree contains a triangle that intersects with the ray
@@ -169,6 +150,5 @@ bool KDTree::hasNearestTriangle(Vector<FLOAT, 3> eye,
   t = minimum_t;
   u = minimum_u;
   v = minimum_v;
-  // to here
   return nearest_triangle != nullptr;
 }

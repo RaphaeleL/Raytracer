@@ -34,8 +34,6 @@ TEST(Triangle, ConstructorWithoutNormals3) {
   ASSERT_TRUE(t.n1.equals_near({-1.0, 0.0, 0.0}));
 }
 
-// TODO: tests for triangles with normals
-
 // intersection is (0,0,0)
 TEST(Triangle, Intersects1) {
   Triangle<FLOAT> triangle({0.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {1.0, 0.0, 0.0});
