@@ -1,0 +1,585 @@
+        -:    0:Source:raytracer.cc
+        -:    0:Graph:raytracer.gcno
+        -:    0:Data:raytracer.gcda
+        -:    0:Runs:1
+        -:    1:// g++ -Wall -pedantic -march=native -mfpmath=sse -mavx2 -O3 raytracer.cc
+        -:    2:// statistics.cc Ggf. -std=c++11 hinzufügen Für spezifischen FLOAT Wert: -D
+        -:    3:// FLOAT=double oder -D FLOAT='long double' hinzufügen Für k-d-Baum Variante:
+        -:    4:// g++ -Wall -pedantic -march=native -mfpmath=sse -mavx2  -O3 -D USE_KDTREE
+        -:    5:// raytracer.cc statistics.cc kdtree.cc Für optimierten Schnittpunktalgorithmus
+        -:    6:// -D OPTIMIZED_INTERSECTS  hinzufügen
+        -:    7:#include "kdtree.h"
+        -:    8:#include "math.h"
+        -:    9:#include "statistics.h"
+        -:   10:#include "triangle.h"
+        -:   11:#include <fstream>
+        -:   12:#include <getopt.h> // GNU getopt
+        -:   13:#include <iostream>
+        -:   14:#include <limits>
+        -:   15:#include <memory>
+        -:   16:#include <sstream>
+        -:   17:#include <string>
+        -:   18:#include <vector>
+        -:   19:
+        -:   20:static int resolution_x = 256;
+        -:   21:static int resolution_y = 256;
+        -:   22:static std::string input_file_name = "examples/teapot.obj";
+        -:   23:static std::string output_bmp_file_name = "output.bmp";
+        -:   24:static bool reverse_vertice_order =
+        -:   25:    false; // switch to counter clockwise orientation of the input file
+        -:   26:static bool write_ppm_to_stdout = true;
+        -:   27:
+        -:   28:// simple value class for the origin and direction of a ray
+        -:   29:template <class T> class Ray {
+        -:   30:private:
+        -:   31:  Vector<T, 3> origin;
+        -:   32:  Vector<T, 3> direction;
+        -:   33:
+        -:   34:public:
+    82903:   35:  Ray(Vector<T, 3> origin, Vector<T, 3> direction)
+    82903:   36:      : origin(origin), direction(direction) {}
+        -:   37:
+519968087:   38:  Vector<T, 3> getOrigin() const { return origin; }
+        -:   39:
+519968087:   40:  Vector<T, 3> getDirection() const { return direction; }
+        -:   41:};
+        -:   42:
+        -:   43:// a value class for a color in RGB space.
+        -:   44:// the red, green, and blue values should be in the range 0.0 to 1.0
+        -:   45:// provides methods to add and multiply two colors or a color with a scalar.
+        -:   46:class Color {
+        -:   47:private:
+        -:   48:  FLOAT red, green, blue; // 0.0 - 1.0
+        -:   49:public:
+        -:   50:  Color(FLOAT red = 0.0, FLOAT green = 0.0, FLOAT blue = 0.0)
+    65536:   51:      : red(red), green(green), blue(blue) {}
+        -:   52:
+        -:   53:  FLOAT getRed() const { return red; }
+        -:   54:
+        -:   55:  FLOAT getGreen() const { return green; }
+        -:   56:
+        -:   57:  FLOAT getBlue() const { return blue; }
+        -:   58:
+        -:   59:  Color operator+(Color addend) const {
+    16389:   60:    return Color(red + addend.red, green + addend.green, blue + addend.blue);
+        -:   61:  }
+        -:   62:
+        -:   63:  Color operator*(Color factor) const {
+    16389:   64:    return Color(red * factor.red, green * factor.green, blue * factor.blue);
+        -:   65:  }
+        -:   66:
+        -:   67:  friend Color operator*(const FLOAT factor, Color color) {
+    33756:   68:    return Color(factor * color.red, factor * color.green, factor * color.blue);
+        -:   69:  }
+        -:   70:};
+        -:   71:
+        -:   72:// a value class for material information like the color, ambient and diffuse
+        -:   73:// light factors, the amount of reflection and transmission light
+        -:   74:class Material {
+        -:   75:private:
+        -:   76:  Color color;
+        -:   77:  FLOAT ambient;      //  percent
+        -:   78:  FLOAT diffuse;      //  percent
+        -:   79:  FLOAT reflection;   // percent
+        -:   80:  FLOAT transmission; // percent
+        -:   81:  // sum of all four should be <= 1.0
+        -:   82:public:
+        -:   83:  Material(Color color = Color(1.0, 0.7, 0.8), FLOAT ambient = 0.3,
+        -:   84:           FLOAT diffuse = 0.7, FLOAT reflection = 0.0,
+        -:   85:           FLOAT transmission = 0.0)
+        1:   86:      : color(color), ambient(ambient), diffuse(diffuse),
+        1:   87:        reflection(reflection), transmission(transmission) {}
+        -:   88:
+    33756:   89:  Color getColor() const { return color; }
+        -:   90:
+    17367:   91:  FLOAT getAmbient() const { return ambient; }
+        -:   92:
+    16389:   93:  FLOAT getDiffuse() const { return diffuse; }
+        -:   94:
+        -:   95:  FLOAT getReflection() const { return reflection; }
+        -:   96:
+        -:   97:  FLOAT getTransmission() const { return transmission; }
+        -:   98:};
+        -:   99:
+        -:  100:// stores the rasterized screen with the color of each pixel
+        1:  101:class Screen {
+        -:  102:private:
+        -:  103:  size_t width;
+        -:  104:  size_t height;
+        -:  105:  std::unique_ptr<Color[]> buffer;
+        -:  106:
+        -:  107:public:
+        1:  108:  Screen(size_t width, size_t height)
+        1:  109:      : width(width), height(height),
+   65537*:  110:        buffer(std::unique_ptr<Color[]>(new Color[width * height])) {}
+        -:  111:
+        -:  112:  void setPixel(size_t x, size_t y, Color color) {
+   131072:  113:    buffer[x + y * width] = color;
+        -:  114:  }
+        -:  115:
+        -:  116:  void clear(Color color = Color(0.0, 0.0, 0.0)) {
+      256:  117:    for (size_t x = 0u; x < getWidth(); x++) {
+    65536:  118:      for (size_t y = 0u; y < getHeight(); y++) {
+        -:  119:        setPixel(x, y, color);
+        -:  120:      }
+        -:  121:    }
+        -:  122:  }
+        -:  123:
+      258:  124:  size_t getWidth() const { return this->width; }
+    65793:  125:  size_t getHeight() const { return this->height; }
+        -:  126:
+   196608:  127:  Color getPixel(size_t x, size_t y) const { return buffer[x + y * width]; }
+        -:  128:};
+        -:  129:
+        -:  130:// a simple camera that can be used for a central projection from an eye to a
+        -:  131:// rectangular view port defined by a upper left point and a vector pointing
+        -:  132:// downsides and to the right both vectors should be located in the same plane
+        -:  133:// and orthogonal to  the eye->center ray (projection is distorted otherwise)
+        -:  134:// the viewport has a defined pixel height and width
+        -:  135:class Camera {
+        -:  136:  Vector<FLOAT, 3> eye, upper_left, down, right;
+        -:  137:  FLOAT pixelWidth;
+        -:  138:  FLOAT pixelHeight;
+        -:  139:
+        -:  140:public:
+        1:  141:  Camera(Vector<FLOAT, 3> eye, Vector<FLOAT, 3> center, Vector<FLOAT, 3> up,
+        -:  142:         Vector<FLOAT, 3> right, FLOAT pixelWidth = 1.0,
+        -:  143:         FLOAT pixelHeight = 1.0)
+        3:  144:      : eye(eye), upper_left(center - right + up), down(-2.0 * up),
+        1:  145:        right(2.0 * right), pixelWidth(pixelWidth), pixelHeight(pixelHeight) {
+        1:  146:    this->right.normalize();
+        1:  147:    this->down.normalize();
+        1:  148:  }
+        -:  149:
+        -:  150:  // creates a camera from a given eye->center ray
+        -:  151:  // this ray points to a center of a rectangle created by an up and right
+        -:  152:  // vector the pixel height and width are calculated from the screen coordiates
+        -:  153:  // with the length of the up and right vector
+        1:  154:  Camera(Vector<FLOAT, 3> eye, Vector<FLOAT, 3> center, Vector<FLOAT, 3> up,
+        -:  155:         Vector<FLOAT, 3> right, Screen &screen)
+        1:  156:      : Camera(eye, center, up, right,
+        1:  157:               2.0 * (right.length() / screen.getWidth()),
+        2:  158:               2.0 * (up.length() / screen.getHeight())) {}
+        -:  159:
+        -:  160:  // returns a ray pointing to the given x,y from this camera's eye point
+    65536:  161:  Ray<FLOAT> getRay(size_t x, size_t y) const {
+        -:  162:    Vector<FLOAT, 3> direction =
+   327680:  163:        (upper_left + (x * pixelWidth) * right + (y * pixelHeight) * down) -
+    65536:  164:        eye;
+    65536:  165:    return Ray<FLOAT>(eye, direction);
+        -:  166:  }
+        -:  167:};
+        -:  168:
+        -:  169:// puts out the image as PPM
+        1:  170:std::ostream &operator<<(std::ostream &out, const Screen &screen) {
+        -:  171:  out << "P3" << std::endl;
+        -:  172:  out << screen.getWidth() << " " << screen.getHeight() << std::endl;
+        -:  173:  out << "255" << std::endl;
+      257:  174:  for (size_t y = 0u; y < screen.getHeight(); y++) {
+    65792:  175:    for (size_t x = 0u; x < screen.getWidth(); x++) {
+    65536:  176:      std::cout << (unsigned short)(screen.getPixel(x, y).getRed() * 255.0)
+        -:  177:                << " "
+    65536:  178:                << (unsigned short)(screen.getPixel(x, y).getGreen() * 255.0)
+        -:  179:                << " "
+    65536:  180:                << (unsigned short)(screen.getPixel(x, y).getBlue() * 255.0)
+    65536:  181:                << " ";
+        -:  182:    }
+        -:  183:    std::cout << std::endl;
+        -:  184:  }
+        -:  185:  std::cout << std::endl;
+        1:  186:  return out;
+        -:  187:}
+        -:  188:
+        -:  189:// writes out the image as binary BMP (for windows)
+        1:  190:void write_bmp(std::ostream &out, const Screen &screen) {
+        -:  191:  unsigned long long size_of_bitmap_data =
+        1:  192:      screen.getWidth() * screen.getHeight() * 4;
+        1:  193:  out.put(0x42);
+        1:  194:  out.put(0x4D); // "BM"
+        1:  195:  out.put(0x00);
+        1:  196:  out.put(0x00);
+        1:  197:  out.put(0x00);
+        1:  198:  out.put(0x00); // size of bmp file
+        1:  199:  out.put(0x00);
+        1:  200:  out.put(0x00);
+        1:  201:  out.put(0x00);
+        1:  202:  out.put(0x00);
+        1:  203:  out.put(0x36);
+        1:  204:  out.put(0x00);
+        1:  205:  out.put(0x00);
+        1:  206:  out.put(0x00); // offset to start of pixel array
+        -:  207:  // Header
+        1:  208:  out.put(0x28);
+        1:  209:  out.put(0x00);
+        1:  210:  out.put(0x00);
+        1:  211:  out.put(0x00); // 40 bytes Number of bytes in the DIB header (from this point)
+        1:  212:  out.put(screen.getWidth() & 0xFF);
+        1:  213:  out.put(screen.getWidth() >> 8 & 0xFF);
+        1:  214:  out.put(0x00);
+        1:  215:  out.put(0x00); // width in pixel
+        1:  216:  out.put(screen.getHeight() & 0xFF);
+        1:  217:  out.put(screen.getHeight() >> 8 & 0xFF);
+        1:  218:  out.put(0x00);
+        1:  219:  out.put(0x00); // height in pixel
+        1:  220:  out.put(0x01);
+        1:  221:  out.put(0x00); // 1 = number of color planes used
+        1:  222:  out.put(0x18);
+        1:  223:  out.put(0x00); // 24 bits per pixel (RGB)
+        1:  224:  out.put(0x00);
+        1:  225:  out.put(0x00);
+        1:  226:  out.put(0x00);
+        1:  227:  out.put(0x00); // 0 = no compression
+        -:  228:  // size of raw bitmap data 16 bytes
+        1:  229:  out.put(size_of_bitmap_data & 0xFF);
+        1:  230:  out.put(size_of_bitmap_data >> 8 & 0xFF);
+        1:  231:  out.put(size_of_bitmap_data >> 16 & 0xFF);
+        1:  232:  out.put(size_of_bitmap_data >> 32 & 0xFF);
+        1:  233:  out.put(0x13);
+        1:  234:  out.put(0x0B);
+        1:  235:  out.put(0x00);
+        1:  236:  out.put(0x00); // 72 DPI resolution for printing
+        1:  237:  out.put(0x13);
+        1:  238:  out.put(0x0B);
+        1:  239:  out.put(0x00);
+        1:  240:  out.put(0x00); //           "
+        1:  241:  out.put(0x00);
+        1:  242:  out.put(0x00);
+        1:  243:  out.put(0x00);
+        1:  244:  out.put(0x00); // 0 colors in the palette
+        1:  245:  out.put(0x00);
+        1:  246:  out.put(0x00);
+        1:  247:  out.put(0x00);
+        1:  248:  out.put(0x00); // 0 = all colors are important
+        -:  249:  // start of pixel map array, 4 byte alignment padding at end of line if nedded
+      257:  250:  for (size_t y = 0u; y < screen.getHeight(); y++) {
+    65792:  251:    for (size_t x = 0u; x < screen.getWidth(); x++) {
+    65536:  252:      out.put(((unsigned short)(screen.getPixel(x, screen.getHeight() - 1 - y)
+    65536:  253:                                    .getRed() *
+        -:  254:                                255.0)) &
+    65536:  255:              0xFF);
+    65536:  256:      out.put(((unsigned short)(screen.getPixel(x, screen.getHeight() - 1 - y)
+    65536:  257:                                    .getGreen() *
+        -:  258:                                255.0)) &
+    65536:  259:              0xFF);
+    65536:  260:      out.put(((unsigned short)(screen.getPixel(x, screen.getHeight() - 1 - y)
+    65536:  261:                                    .getBlue() *
+        -:  262:                                255.0)) &
+    65536:  263:              0xFF);
+        -:  264:    }
+     256*:  265:    for (size_t padding_bytes = 0u; padding_bytes < screen.getWidth() % 4;
+        -:  266:         padding_bytes++) {
+    #####:  267:      out.put(0x00);
+        -:  268:    }
+        -:  269:  }
+        1:  270:}
+        -:  271:
+        -:  272:// a simple light source with a position and a light color
+        -:  273:// the light is emitted evenly from the given position in all directions
+        -:  274:class Light {
+        -:  275:  Vector<FLOAT, 3> position;
+        -:  276:  Color color;
+        -:  277:
+        -:  278:public:
+        -:  279:  Light(Vector<FLOAT, 3> position = Vector<FLOAT, 3>({0.0, 0.0, 1000.0}),
+        -:  280:        Color color = Color(1.0, 1.0, 1.0))
+        -:  281:      : position(position), color(color) {}
+        -:  282:
+        -:  283:  Color getColor() const { return color; }
+        -:  284:
+        -:  285:  Vector<FLOAT, 3> getPosition() const { return position; }
+        -:  286:};
+        -:  287:
+        -:  288:// the scene with all triangles and light sources
+        -:  289:// contains the algorithm to determine the visible triangle for a given ray
+        -:  290:class Scene {
+        -:  291:  std::vector<Triangle<FLOAT>> triangles;
+        -:  292:  std::vector<Light> lights;
+        -:  293:
+        -:  294:public:
+    6320*:  295:  void add(Triangle<FLOAT> triangle) { triangles.push_back(triangle); }
+        -:  296:
+        1:  297:  void addLight(Light light) { lights.push_back(light); }
+        -:  298:
+        -:  299:  //  quickfix, do not alter triangles after calling this method
+        1:  300:  std::vector<Triangle<FLOAT> *> getTriangles() {
+        -:  301:    std::vector<Triangle<FLOAT> *> triangles_ptr;
+     6321:  302:    for (size_t i = 0; i < triangles.size(); i++) {
+     6320:  303:      triangles_ptr.push_back(&triangles[i]);
+        -:  304:    }
+        1:  305:    return triangles_ptr;
+        -:  306:  }
+        -:  307:
+        -:  308:  // brute force algorithme to determine the nearest (if NEAREST is true)
+        -:  309:  // triangle of this scence that has an intersection with the given ray the
+        -:  310:  // intersection point p is p = ray.origin + t * ray.direction the u-v
+        -:  311:  // parameters are the barycentric coordinates of the intersection within  the
+        -:  312:  // triangle
+        -:  313:
+    82903:  314:  bool hasNearestTriangle(const Ray<FLOAT> &ray,
+        -:  315:                          Triangle<FLOAT> *&nearest_triangle, FLOAT &t,
+        -:  316:                          FLOAT &u, FLOAT &v, const bool NEAREST = true) {
+        -:  317:    FLOAT minimum_t = INFINITY;
+        -:  318:    FLOAT minimum_u = 0.0, minimum_v = 0.0;
+520032645:  319:    for (size_t i = 0u; i < triangles.size(); i++) {
+        -:  320:      Triangle<FLOAT> *triangle = &triangles[i];
+519950720:  321:      stats.no_ray_triangle_intersection_tests++;
+519950720:  322:      bool intersect = triangle->intersects(ray.getOrigin(), ray.getDirection(),
+        -:  323:                                            t, u, v, minimum_t);
+519950720:  324:      if (intersect) {
+    35294:  325:        stats.no_ray_triangle_intersections_found++;
+    35294:  326:        if ((nearest_triangle == nullptr) || (t < minimum_t)) {
+    35290:  327:          minimum_t = t;
+    35290:  328:          minimum_u = u;
+    35290:  329:          minimum_v = v;
+    35290:  330:          nearest_triangle = triangle;
+    35290:  331:          if (!NEAREST) {
+        -:  332:            return true;
+        -:  333:          }
+        -:  334:        }
+        -:  335:      }
+        -:  336:    }
+    81925:  337:    t = minimum_t;
+    81925:  338:    u = minimum_u;
+    81925:  339:    v = minimum_v;
+    81925:  340:    return nearest_triangle != nullptr;
+        -:  341:  }
+        -:  342:
+        -:  343:  // return true iff the ray is blocked by a triangle
+        -:  344:  bool blocked(const Ray<FLOAT> &ray) {
+    17367:  345:    Triangle<FLOAT> *triangle = nullptr;
+        -:  346:    FLOAT t, u, v;
+    17367:  347:    return hasNearestTriangle(ray, triangle, t, u, v, false);
+        -:  348:  }
+        -:  349:
+        -:  350:  // shades the intersection point of the ray with the triangle with the
+        -:  351:  // material information the normal vectors and u-v-parameter are used for
+        -:  352:  // interpolation
+    17367:  353:  Color shade(const Ray<FLOAT> &ray, Triangle<FLOAT> &triangle,
+        -:  354:              Material &material, FLOAT &t, FLOAT &u, FLOAT &v) {
+        -:  355:    Color color = material.getAmbient() * material.getColor();
+    17367:  356:    FLOAT factor = 1.0 / lights.size();
+        -:  357:    Vector<FLOAT, 3> intersection =
+    34734:  358:        (ray.getOrigin() + 0.9999 * t * ray.getDirection());
+        -:  359:    Vector<FLOAT, 3> normal =
+    86835:  360:        (u * triangle.n1) + (v * triangle.n2) + ((1.0 - u - v) * triangle.n3);
+        -:  361:
+    17367:  362:    normal.normalize();
+    34734:  363:    for (Light light : lights) {
+    34734:  364:      Vector<FLOAT, 3> light_direction = light.getPosition() - intersection;
+        -:  365:      const Ray<FLOAT> ray_to_light(intersection, light_direction);
+    17367:  366:      if (!blocked(ray_to_light)) {
+    16389:  367:        light_direction.normalize();
+        -:  368:        FLOAT angle =
+    16389:  369:            std::max<FLOAT>(0.0, light_direction.scalar_product(normal));
+    16389:  370:        color = color + angle * factor * material.getDiffuse() *
+    16389:  371:                            material.getColor() * light.getColor();
+        -:  372:      }
+        -:  373:    }
+    17367:  374:    return color;
+        -:  375:  }
+        -:  376:};
+        -:  377:
+        -:  378:// Reads in 3d scene from Wavefront.obj
+        -:  379:// only triangles are read in, no polygones, no normals
+        -:  380:// only lines starting with v (vertexes) and f (faces) are read in
+        -:  381:// other lines are ignored
+        1:  382:void read_wavefront(std::ifstream &in, Scene &scene) {
+        -:  383:  std::vector<Vector<FLOAT, 3>> vertices;
+        -:  384:  std::vector<Vector<FLOAT, 3>> normals;
+        -:  385:  size_t no_of_triangles = 0u;
+        -:  386:  Vector<FLOAT, 3> vertice;
+        -:  387:  Vector<FLOAT, 3> normal;
+        -:  388:  char c;
+    13615:  389:  while (in >> c) {
+    13614:  390:    if (c == 'v' && in.peek() == ' ') {
+        -:  391:      FLOAT x, y, z;
+        -:  392:      in >> x;
+        -:  393:      in >> y;
+        -:  394:      in >> z;
+     3644:  395:      vertice = Vector<FLOAT, 3>({x, y, z});
+     3644:  396:      vertices.push_back(vertice);
+     9970:  397:    } else if (c == 'f' && in.peek() == ' ') {
+        -:  398:
+        -:  399:      size_t xv, yv, zv;
+     6320:  400:      size_t xn = 0, yn, zn;
+        -:  401:      in >> xv;
+     6320:  402:      if (in.peek() == '/')
+     6320:  403:        in.ignore(); // no texture coordinates supported
+     6320:  404:      if (in.peek() == '/') {
+     6320:  405:        in.ignore();
+        -:  406:        in >> xn;
+        -:  407:      }
+        -:  408:      in >> yv;
+     6320:  409:      if (in.peek() == '/')
+     6320:  410:        in.ignore(); // no texture coordinates supported
+     6320:  411:      if (in.peek() == '/') {
+     6320:  412:        in.ignore();
+        -:  413:        in >> yn;
+        -:  414:      }
+        -:  415:      in >> zv;
+     6320:  416:      if (in.peek() == '/')
+     6320:  417:        in.ignore(); // no texture coordinates supported
+     6320:  418:      if (in.peek() == '/') {
+     6320:  419:        in.ignore();
+        -:  420:        in >> zn;
+        -:  421:      }
+        -:  422:
+     6320:  423:      if (reverse_vertice_order) {
+        -:  424:        std::swap(yv, zv);
+        -:  425:        std::swap(yn, zn);
+        -:  426:      }
+     6320:  427:      if (xn == 0) { // no normals
+    #####:  428:        scene.add(Triangle<FLOAT>(
+    #####:  429:            {vertices[xv - 1], vertices[yv - 1], vertices[zv - 1]}));
+        -:  430:      } else {
+    12640:  431:        scene.add(Triangle<FLOAT>({vertices[xv - 1], vertices[yv - 1],
+     6320:  432:                                   vertices[zv - 1], normals[xn - 1],
+     6320:  433:                                   normals[yn - 1], normals[zn - 1]}));
+        -:  434:      }
+     6320:  435:      no_of_triangles++;
+     3650:  436:    } else if (c == 'v' && in.peek() == 'n') {
+     3644:  437:      in >> c;
+     3644:  438:      if (in.peek() == ' ') {
+        -:  439:        FLOAT nx, ny, nz;
+        -:  440:        in >> nx;
+        -:  441:        in >> ny;
+        -:  442:        in >> nz;
+     3644:  443:        normal = Vector<FLOAT, 3>({nx, ny, nz});
+     3644:  444:        normals.push_back(normal);
+        -:  445:      }
+        -:  446:    }
+        -:  447:    // read to end of line
+    13614:  448:    in.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        -:  449:  }
+        -:  450:
+        -:  451:  std::cerr << "no of triangles : " << no_of_triangles << std::endl;
+        -:  452:  std::cerr << "no of vertices : " << vertices.size() << std::endl;
+        -:  453:  std::cerr << "no of normals : " << normals.size() << std::endl;
+        -:  454:  std::cerr << "memory used for all triangles [byte] : "
+        1:  455:            << no_of_triangles * sizeof(Triangle<FLOAT>) << std::endl;
+        1:  456:}
+        -:  457:
+        -:  458:// the raytrace algorithm but without refraction and reflection
+        1:  459:void raytrace(Camera &camera, Scene &scene, Screen &screen,
+        -:  460:              KDTree *tree = nullptr) {
+        -:  461:  screen.clear();
+        -:  462:  Material material;
+        -:  463:  Color color;
+      257:  464:  for (FLOAT x = 0.0; x < screen.getWidth(); x++) {
+    65792:  465:    for (FLOAT y = 0.0; y < screen.getHeight(); y++) {
+        -:  466:      color = Color(0.0, 0.0, 0.0);
+    65536:  467:      const Ray<FLOAT> ray = camera.getRay(x, y);
+    65536:  468:      Triangle<FLOAT> *nearest_triangle = nullptr;
+    65536:  469:      FLOAT t = INFINITY, u = 0, v = 0;
+        -:  470:#ifndef USE_KDTREE
+        -:  471:      bool hasNearestTriangle =
+    65536:  472:          scene.hasNearestTriangle(ray, nearest_triangle, t, u, v);
+        -:  473:#else
+        -:  474:      bool hasNearestTriangle = tree->hasNearestTriangle(
+        -:  475:          ray.getOrigin(), ray.getDirection(), nearest_triangle, t, u, v);
+        -:  476:#endif
+    65536:  477:      if (hasNearestTriangle) {
+        -:  478:        // no reflection and refraction
+    17367:  479:        color = scene.shade(ray, *nearest_triangle, material, t, u, v);
+        -:  480:      }
+        -:  481:      screen.setPixel(x, y, color);
+        -:  482:    }
+        -:  483:  }
+        1:  484:}
+        -:  485:
+        1:  486:void parse_arguments(int argc, char *argv[]) {
+        -:  487:  static struct option long_options[] = {
+        -:  488:      {"file", required_argument, 0, 'f'},
+        -:  489:      {"width", required_argument, 0, 'w'},
+        -:  490:      {"height", required_argument, 0, 'h'},
+        -:  491:      {"help", optional_argument, 0, 'u'},
+        -:  492:      {"no_ppm", optional_argument, 0, 'n'},
+        -:  493:  };
+        -:  494:  int c;
+        -:  495:  int option_index;
+        -:  496:
+        1:  497:  while ((c = getopt_long(argc, argv, "ro:", long_options, &option_index)) !=
+        -:  498:         -1) {
+    #####:  499:    switch (c) {
+        -:  500:    case 'f':
+    #####:  501:      input_file_name = std::string(optarg);
+    #####:  502:      break;
+    #####:  503:    case 'r':
+    #####:  504:      reverse_vertice_order = true;
+    #####:  505:      break;
+        -:  506:    case 'w':
+    #####:  507:      resolution_x = std::stoi(optarg);
+    #####:  508:      break;
+        -:  509:    case 'h':
+    #####:  510:      resolution_y = std::stoi(optarg);
+    #####:  511:      break;
+        -:  512:    case 'o':
+    #####:  513:      output_bmp_file_name = std::string(optarg);
+    #####:  514:      break;
+    #####:  515:    case 'n':
+    #####:  516:      write_ppm_to_stdout = false;
+    #####:  517:      break;
+        -:  518:    case 'u':
+    #####:  519:      std::cout << "Aufruf: " << argv[0] << " [options]" << std::endl;
+        -:  520:      std::cout << "  --file FILE          wavefront obj input file "
+        -:  521:                   "('example/teapot.obj')"
+        -:  522:                << std::endl;
+        -:  523:      std::cout << "  --width WIDTH        horizontal resolution (256)"
+        -:  524:                << std::endl;
+        -:  525:      std::cout << "  --height HEIGHT      vertical resolution (256)"
+        -:  526:                << std::endl;
+        -:  527:      std::cout << "  --help               this help text" << std::endl;
+        -:  528:      std::cout << "  --no_ppm             no PPM output is generated"
+        -:  529:                << std::endl;
+        -:  530:      std::cout << "  -o BMP               BMP output file ('output.bmp')"
+        -:  531:                << std::endl;
+        -:  532:      std::cout << "  -r                   reverse vertice order of triangles "
+        -:  533:                   "in input file"
+        -:  534:                << std::endl;
+    #####:  535:      exit(0);
+        -:  536:    }
+        -:  537:  }
+        -:  538:
+        -:  539:  std::cerr << "reading from       : " << input_file_name << std::endl;
+        -:  540:  std::cerr << "writing bmp to     : " << output_bmp_file_name << std::endl;
+        1:  541:  std::cerr << "resolution x set to: " << resolution_x << std::endl;
+        1:  542:  std::cerr << "resolution y set to: " << resolution_y << std::endl;
+        1:  543:  std::cerr << "vertices reversed  : " << reverse_vertice_order << std::endl;
+        1:  544:  std::cerr << "write ppm          : " << write_ppm_to_stdout << std::endl;
+        1:  545:}
+        -:  546:
+        1:  547:int main(int argc, char *argv[]) {
+        1:  548:  parse_arguments(argc, argv);
+        1:  549:  Scene scene;
+        1:  550:  scene.addLight(Light(Vector<FLOAT, 3>{500.0, 500.0, 1000.0}));
+        2:  551:  std::ifstream input(input_file_name);
+        -:  552:  std::ofstream output(output_bmp_file_name,
+        2:  553:                       std::ofstream::binary); // for windows
+        1:  554:  read_wavefront(input, scene);
+        1:  555:  std::vector<Triangle<FLOAT> *> triangles = scene.getTriangles();
+        1:  556:  Screen screen(resolution_x, resolution_y);
+        -:  557:
+        -:  558:  // camera for teapot_large.obj
+        1:  559:  Camera camera(Vector<FLOAT, 3>({0.05, 1.0, 200.0}),
+        1:  560:                Vector<FLOAT, 3>({0.05, 1.0, 100.0}),
+        1:  561:                Vector<FLOAT, 3>({0.0, 1.6, 0.0}),
+        2:  562:                Vector<FLOAT, 3>({1.6, 0.0, 0.0}), screen);
+        -:  563:
+        1:  564:  stats.time_start();
+        -:  565:#ifndef USE_KDTREE
+        1:  566:  raytrace(camera, scene, screen);
+        -:  567:#else
+        -:  568:  std::unique_ptr<KDTree> tree =
+        -:  569:      std::unique_ptr<KDTree>(KDTree::buildTree(triangles));
+        -:  570:  raytrace(camera, scene, screen, tree.get());
+        -:  571:#endif
+        1:  572:  stats.time_stop();
+        1:  573:  if (write_ppm_to_stdout) {
+        1:  574:    std::cout << screen; // write image in PPM format to the standard output
+        -:  575:  }
+        1:  576:  write_bmp(output, screen);
+        1:  577:  output.close();
+        1:  578:  stats.print();
+        -:  579:
+        -:  580:  return 0;
+        -:  581:}
