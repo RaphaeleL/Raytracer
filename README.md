@@ -8,7 +8,9 @@ This Code should run on every Architecture. The Run Commands down below are for 
 g++ -Wall -pedantic -march=native -mfpmath=sse -mavx -O3 -fprofile-arcs -ftest-coverage -pg raytracer.cc statistics.cc
 ```
 
-To run the Profiler use following Command (also for Intel Linux Systems):
+to use the optimized version append `-d OPTIMIZED_INTERSECTS` to your `g++`-Command
+
+for teaching purposes, an optimized and a non-optimized variant are implemented in some places. to understand the differences, the profile can be executed as follows.
 
 ```bash
 gcov raytracer.cc 

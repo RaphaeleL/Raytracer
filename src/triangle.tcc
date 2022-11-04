@@ -7,7 +7,7 @@
 //                                   ^^^^^^^^^^^^^^^^^^ 
 //                                    M1 Probleme -> nur für Pool PC's
 
-#define OPTIMIZED_INTERSECTS
+// #define OPTIMIZED_INTERSECTS
 
 template <class T>
 class Triangle {
